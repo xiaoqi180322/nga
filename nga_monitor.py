@@ -1,119 +1,142 @@
+import json
 import requests
 from bs4 import BeautifulSoup
 import os
-import time
 
-# 读取环境变量（从GitHub Secrets传入）
-nga_uid = os.getenv("NGA_UID")
-send_key = os.getenv("SERVERCHAN_KEY")
-nga_cookie = os.getenv("NGA_COOKIE", "")  # 可选：NGA登录Cookie
+# ---------------------- 必改配置（替换成你的信息） ----------------------
+# 要监控的NGA用户UID（数字，比如123456）
+TARGET_UID = os.getenv("NGA_UID", "你的目标用户UID")
+# Server酱KEY（用于推送到微信）
+SERVERCHAN_KEY = os.getenv("SERVERCHAN_KEY", "你的Server酱KEY")
+# NGA登录Cookie（必须填，否则抓不到回复）
+NGA_COOKIE = os.getenv("NGA_COOKIE", "你的NGA完整Cookie")
 
-# 已推送的帖子ID（本次运行临时存储）
-posted_tids = set()
+# 存储已处理回复的文件（自动生成，无需修改）
+PROCESSED_REPLIES = "nga_replies.json"
+NGA_URL = "https://bbs.nga.cn"
 
-# NGA请求头（模拟浏览器，可加Cookie）
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Cookie": nga_cookie  # 带上登录Cookie，解决抓取失败
-}
+# ---------------------- 核心工具函数 ----------------------
+def get_headers(referer=NGA_URL):
+    """生成带Cookie的请求头，模拟浏览器"""
+    return {
+        "Cookie": NGA_COOKIE,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0 Safari/537.36",
+        "Referer": referer,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
 
-def push_to_wechat(title, desp):
-    """通用推送函数（测试/正常推送都用这个）"""
-    if not send_key:
-        print("错误：未配置SERVERCHAN_KEY（Server酱的SendKey）")
-        return False
-    
-    # 发送推送请求到Server酱
-    push_url = f"https://sctapi.ftqq.com/{send_key}.send"
-    data = {"title": title, "desp": desp}
+def load_processed():
+    """加载已监控过的回复ID，避免重复推送"""
     try:
-        resp = requests.post(push_url, data=data, timeout=10)
-        print(f"推送结果：{resp.text}")
-        return True
-    except Exception as e:
-        print(f"推送失败：{str(e)}")
-        return False
+        with open(PROCESSED_REPLIES, "r", encoding="utf-8") as f:
+            return set(json.load(f))
+    except FileNotFoundError:
+        return set()
 
-def fetch_user_posts():
-    """抓取NGA用户帖子（带Cookie）"""
-    if not nga_uid:
-        print("错误：未配置NGA_UID（目标用户的数字ID）")
-        return "未知用户", []
-    
-    # 访问用户主页
-    url = f"https://bbs.nga.cn/nuke.php?uid={nga_uid}"
-    try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        resp.encoding = "utf-8"
-        soup = BeautifulSoup(resp.text, "html.parser")
-        
-        # 提取用户名
-        username_elem = soup.select_one(".usertop .username")
-        username = username_elem.text.strip() if username_elem else "未知用户"
-        
-        # 提取帖子列表
-        posts = soup.select(".topic_row")
-        post_list = []
-        for post in posts:
-            tid = post.get("data-tid")
-            title_elem = post.select_one(".topic_title")
-            if tid and title_elem:
-                title = title_elem.text.strip()
-                content_elem = post.select_one(".topic_content")
-                content = content_elem.text.strip()[:200] if content_elem else ""
-                post_list.append({"tid": tid, "title": title, "content": content})
-        
-        print(f"抓取成功：找到{len(post_list)}条帖子")
-        return username, post_list
-    except Exception as e:
-        print(f"抓取失败：{str(e)}（大概率是UID错/未加NGA登录Cookie）")
-        return "未知用户", []
+def save_processed(processed_ids):
+    """保存已监控的回复ID"""
+    with open(PROCESSED_REPLIES, "w", encoding="utf-8") as f:
+        json.dump(list(processed_ids), f)
 
-def main():
-    """主逻辑：先发测试推送，再监控帖子"""
-    # ========== 1. 发送测试推送（核心新增部分） ==========
-    test_title = "🎉 NGA监控脚本测试成功"
-    test_desp = f"""
-你的NGA云端监控已部署完成！
-- 监控的UID：{nga_uid if nga_uid else "未配置"}
-- 测试时间：{time.strftime('%Y-%m-%d %H:%M:%S')}
-- 后续目标用户发新帖会自动推送到微信～
-
-如果提示抓取失败，需：
-1. 核对NGA_UID是否为纯数字；
-2. 添加NGA登录Cookie到Secrets（名称：NGA_COOKIE）。
-    """.strip()
-    
-    # 发送测试消息
-    test_success = push_to_wechat(test_title, test_desp)
-    if test_success:
-        print("✅ 测试推送已发送，微信请查收！")
-    else:
-        print("❌ 测试推送失败，检查SERVERCHAN_KEY！")
-
-    # ========== 2. 正常监控帖子 ==========
-    username, posts = fetch_user_posts()
-    if not posts:
-        print("ℹ️ 暂无帖子/抓取失败（不影响推送功能）")
+def push_wechat(content):
+    """推送到微信"""
+    if not SERVERCHAN_KEY:
+        print("未配置Server酱KEY，跳过推送")
         return
-    
-    # 筛选新帖并推送
-    new_posts = [p for p in posts if p["tid"] not in posted_tids]
-    if new_posts:
-        print(f"🔔 发现{len(new_posts)}条新帖，开始推送！")
-        for post in new_posts:
-            desp = f"""
-**发帖人**：{username}
-**帖子标题**：{post['title']}
-**帖子链接**：https://bbs.nga.cn/read.php?tid={post['tid']}
-**发布时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}
+    try:
+        res = requests.post(
+            f"https://sctapi.ftqq.com/{SERVERCHAN_KEY}.send",
+            data={"title": f"NGA用户{TARGET_UID}新回复", "desp": content},
+            timeout=10
+        )
+        print("推送成功" if res.json()["code"] == 0 else f"推送失败：{res.text}")
+    except Exception as e:
+        print(f"推送异常：{str(e)}")
 
-内容预览：{post['content']}...
-            """.strip()
-            push_to_wechat(f"【NGA】{username}发布新帖", desp)
-            posted_tids.add(post["tid"])
+# ---------------------- 抓取目标用户的所有回复 ----------------------
+def fetch_user_replies():
+    """抓取目标用户在NGA发布的所有回复（核心逻辑）"""
+    headers = get_headers()
+    # NGA用户回复列表页（直接抓取用户所有回复，无需先抓帖子）
+    reply_url = f"{NGA_URL}/nuke.php?func=ucp&uid={TARGET_UID}&type=reply&page=1"
+    
+    try:
+        res = requests.get(reply_url, headers=headers, timeout=15)
+        res.raise_for_status()
+        soup = BeautifulSoup(res.text, "html.parser")
+        
+        replies = []
+        # 遍历回复列表，提取关键信息
+        for item in soup.select(".plhin tr"):
+            # 提取回复关联的帖子信息
+            post_link = item.select_one("a[href*='tid=']")
+            if not post_link:
+                continue
+            post_title = post_link.get_text(strip=True)
+            post_tid = post_link["href"].split("tid=")[-1].split("&")[0]
+            post_url = f"{NGA_URL}/read.php?tid={post_tid}"
+            
+            # 提取回复楼层和时间
+            floor_info = item.select_one(".greyfont").get_text(strip=True)
+            floor_num = floor_info.split("楼")[0].split("#")[-1] if "楼" in floor_info else "未知楼层"
+            reply_time = floor_info.split("发表于")[-1] if "发表于" in floor_info else "未知时间"
+            
+            # 提取回复内容（精简版）
+            reply_content = item.select_one(".quote").get_text(strip=True) if item.select_one(".quote") else "无内容"
+            
+            # 生成唯一回复ID（帖子ID_楼层号，防止重复）
+            reply_id = f"{post_tid}_{floor_num}"
+            
+            replies.append({
+                "reply_id": reply_id,
+                "post_title": post_title,
+                "post_url": post_url,
+                "floor_num": floor_num,
+                "reply_time": reply_time,
+                "content": reply_content
+            })
+        return replies
+    except Exception as e:
+        print(f"抓取回复失败：{str(e)}")
+        return []
+
+# ---------------------- 主逻辑 ----------------------
+def main():
+    # 校验关键配置
+    if not NGA_COOKIE or NGA_COOKIE == "你的NGA完整Cookie":
+        print("❌ 请先配置有效的NGA Cookie！")
+        return
+    if not TARGET_UID or TARGET_UID == "你的目标用户UID":
+        print("❌ 请配置要监控的用户UID！")
+        return
+
+    print("🔍 开始监控NGA用户新回复...")
+    processed_ids = load_processed()
+    all_replies = fetch_user_replies()
+    
+    # 筛选未监控过的新回复
+    new_replies = [r for r in all_replies if r["reply_id"] not in processed_ids]
+    
+    if new_replies:
+        print(f"✅ 发现{len(new_replies)}条新回复！")
+        # 拼接推送内容
+        push_text = ""
+        for idx, reply in enumerate(new_replies, 1):
+            push_text += f"""
+【新回复{idx}】
+帖子：{reply['post_title']}
+楼层：{reply['floor_num']}
+时间：{reply['reply_time']}
+内容：{reply['content']}
+链接：{reply['reply_url'] if 'reply_url' in reply else reply['post_url']}
+---
+"""
+        # 推送+标记为已处理
+        push_wechat(push_text)
+        processed_ids.update([r["reply_id"] for r in new_replies])
+        save_processed(processed_ids)
     else:
-        print("ℹ️ 暂无新帖")
+        print("ℹ️ 暂无新回复")
 
 if __name__ == "__main__":
     main()
