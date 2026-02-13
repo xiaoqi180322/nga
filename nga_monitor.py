@@ -153,11 +153,11 @@ def main():
     else:
         print("✅ Cookie配置校验通过")
     
-    if not TARGET_UID or TARGET_UID == "150058":
-        print("❌ 配置错误：未填写要监控的用户authorid！")
-        config_ok = False
-    else:
-        print(f"✅ 监控目标authorid校验通过：{TARGET_UID}")
+    if not TARGET_UID:
+    print("❌ 配置错误：未填写要监控的用户authorid！")
+    config_ok = False
+else:
+    print(f"✅ 监控目标authorid校验通过：{TARGET_UID}")
     
     if not SERVERCHAN_KEY or SERVERCHAN_KEY == "你的Server酱KEY":
         print("⚠️ 配置提醒：未填写Server酱KEY（仅影响推送，不影响监控）")
