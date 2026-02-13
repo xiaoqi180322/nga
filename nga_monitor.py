@@ -4,22 +4,28 @@ from bs4 import BeautifulSoup
 import os
 
 # ---------------------- 必改配置（替换成你的信息） ----------------------
+# 目标用户authorid（就是你链接里的150058）
 TARGET_UID = os.getenv("NGA_UID", "150058")
+# Server酱KEY（用于推送到微信）
 SERVERCHAN_KEY = os.getenv("SERVERCHAN_KEY", "SCT314606TD2vODo7oR8UKhyZAw6oKKyGz")
+# NGA登录Cookie（必须填，否则抓不到回复）
 NGA_COOKIE = os.getenv("NGA_COOKIE", "ngacn0comUserInfo=%25D0%25C4%25BA%25A3%09%25E5%25BF%2583%25E6%25B5%25B7%0939%0939%09%0910%0934936%094%090%09207%2C347%2C84%0961_4%2C-7_30; _178i=1; ngaPassportUid=535794; ngaPassportUrlencodedUname=%25D0%25C4%25BA%25A3; ngaPassportCid=X9oj2iogsjgju542lgfqbkc31uvpb8n0iidtoted; Hm_lvt_2728f3eacf75695538f5b1d1b5594170=1770682296,1770857648,1770969101,1771001633; HMACCOUNT=27B56921B761C67A; ngacn0comUserInfoCheck=317ea4545cd951307fd82fd586a0f872; ngacn0comInfoCheckTime=1771017192; lastvisit=1771017843; lastpath=/thread.php?searchpost=1&authorid=150058; bbsmisccookies=%7B%22uisetting%22%3A%7B0%3A1%2C1%3A1771468450%7D%2C%22pv_count_for_insad%22%3A%7B0%3A-18%2C1%3A1771088472%7D%2C%22insad_views%22%3A%7B0%3A1%2C1%3A1771088472%7D%7D; Hm_lpvt_2728f3eacf75695538f5b1d1b5594170=1771017843")
 
 # 存储已处理回复的文件
 PROCESSED_REPLIES = "nga_replies.json"
-NGA_URL = "https://bbs.nga.cn"
+# 正确的NGA域名和回复搜索地址
+NGA_BASE_URL = "https://nga.178.com"
+REPLY_SEARCH_URL = f"{NGA_BASE_URL}/thread.php?searchpost=1&authorid={TARGET_UID}"
 
 # ---------------------- 核心工具函数 ----------------------
-def get_headers(referer=NGA_URL):
-    """生成带Cookie的请求头"""
+def get_headers(referer=NGA_BASE_URL):
+    """生成带Cookie的请求头，适配nga.178.com域名"""
     return {
         "Cookie": NGA_COOKIE,
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0 Safari/537.36",
         "Referer": referer,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Host": "nga.178.com"  # 关键：指定正确的Host
     }
 
 def load_processed():
@@ -39,7 +45,7 @@ def save_processed(processed_ids):
 
 def push_wechat(content):
     """推送到微信"""
-    if not SERVERCHAN_KEY:
+    if not SERVERCHAN_KEY or SERVERCHAN_KEY == "你的Server酱KEY":
         print("⚠️ 未配置Server酱KEY，跳过推送（如需推送请填写有效KEY）")
         return
     try:
@@ -55,34 +61,67 @@ def push_wechat(content):
     except Exception as e:
         print(f"❌ 推送异常：{str(e)}")
 
-# ---------------------- 抓取目标用户的所有回复 ----------------------
+# ---------------------- 抓取目标用户的所有回复（适配正确地址） ----------------------
 def fetch_user_replies():
-    """抓取目标用户在NGA发布的所有回复"""
-    print(f"🔍 开始抓取用户{TARGET_UID}的回复列表...")
-    headers = get_headers()
-    reply_url = f"{NGA_URL}/nuke.php?func=ucp&uid={TARGET_UID}&type=reply&page=1"
+    """抓取目标用户在NGA发布的所有回复（使用正确的搜索地址）"""
+    print(f"🔍 开始抓取用户{TARGET_UID}的回复列表（地址：{REPLY_SEARCH_URL}）...")
+    headers = get_headers(referer=REPLY_SEARCH_URL)
     
     try:
-        res = requests.get(reply_url, headers=headers, timeout=15)
+        # 发起请求（关闭SSL验证，避免部分环境报错）
+        res = requests.get(
+            REPLY_SEARCH_URL,
+            headers=headers,
+            timeout=15,
+            verify=False  # 适配部分环境的SSL问题
+        )
         res.raise_for_status()
+        # 正确解码页面（NGA是GBK/GB2312编码）
+        res.encoding = "gbk"
         soup = BeautifulSoup(res.text, "html.parser")
         
         replies = []
-        # 遍历回复列表
-        for item in soup.select(".plhin tr"):
-            post_link = item.select_one("a[href*='tid=']")
-            if not post_link:
+        # 适配nga.178.com的回复列表结构
+        # 遍历所有回复项（核心选择器适配）
+        for reply_item in soup.select(".postlist > div"):
+            # 提取帖子标题和链接
+            post_title_elem = reply_item.select_one("a[href*='tid=']")
+            if not post_title_elem:
                 continue
-            post_title = post_link.get_text(strip=True)
-            post_tid = post_link["href"].split("tid=")[-1].split("&")[0]
-            post_url = f"{NGA_URL}/read.php?tid={post_tid}"
+            post_title = post_title_elem.get_text(strip=True)
+            post_href = post_title_elem.get("href")
+            # 拼接完整的帖子链接
+            if not post_href.startswith("http"):
+                post_url = f"{NGA_BASE_URL}/{post_href}"
+            else:
+                post_url = post_href
+            # 提取帖子ID（tid）
+            post_tid = post_href.split("tid=")[-1].split("&")[0] if "tid=" in post_href else "未知"
             
-            floor_info = item.select_one(".greyfont").get_text(strip=True)
-            floor_num = floor_info.split("楼")[0].split("#")[-1] if "楼" in floor_info else "未知楼层"
-            reply_time = floor_info.split("发表于")[-1] if "发表于" in floor_info else "未知时间"
+            # 提取回复楼层和时间
+            info_elem = reply_item.select_one(".authorinfo")
+            if info_elem:
+                info_text = info_elem.get_text(strip=True)
+                # 提取楼层号（格式：#123 楼）
+                floor_num = ""
+                for part in info_text.split():
+                    if part.startswith("#") and part.endswith("楼"):
+                        floor_num = part.replace("#", "").replace("楼", "")
+                        break
+                # 提取回复时间
+                reply_time = ""
+                if "发表于" in info_text:
+                    reply_time = info_text.split("发表于")[-1].strip()
+            else:
+                floor_num = "未知楼层"
+                reply_time = "未知时间"
             
-            reply_content = item.select_one(".quote").get_text(strip=True) if item.select_one(".quote") else "无内容"
-            reply_id = f"{post_tid}_{floor_num}"
+            # 提取回复内容
+            content_elem = reply_item.select_one(".postcontent")
+            reply_content = content_elem.get_text(strip=True) if content_elem else "无内容"
+            
+            # 生成唯一回复ID（帖子ID_楼层号）
+            reply_id = f"{post_tid}_{floor_num}" if floor_num else f"{post_tid}_{len(replies)+1}"
             
             replies.append({
                 "reply_id": reply_id,
@@ -102,7 +141,7 @@ def fetch_user_replies():
 # ---------------------- 主逻辑 ----------------------
 def main():
     print("="*50)
-    print("🚀 NGA用户新回复监控脚本启动")
+    print("🚀 NGA用户新回复监控脚本启动（适配nga.178.com）")
     print("="*50)
     
     # 1. 校验关键配置
@@ -114,11 +153,11 @@ def main():
     else:
         print("✅ Cookie配置校验通过")
     
-    if not TARGET_UID or TARGET_UID == "你的目标用户UID":
-        print("❌ 配置错误：未填写要监控的用户UID！")
+    if not TARGET_UID or TARGET_UID == "150058":
+        print("❌ 配置错误：未填写要监控的用户authorid！")
         config_ok = False
     else:
-        print(f"✅ 监控目标UID校验通过：{TARGET_UID}")
+        print(f"✅ 监控目标authorid校验通过：{TARGET_UID}")
     
     if not SERVERCHAN_KEY or SERVERCHAN_KEY == "你的Server酱KEY":
         print("⚠️ 配置提醒：未填写Server酱KEY（仅影响推送，不影响监控）")
