@@ -10,9 +10,10 @@ send_key = os.getenv("SERVERCHAN_KEY")
 # 已推送的帖子ID（本次运行临时存储）
 posted_tids = set()
 
-# NGA请求头（模拟浏览器，避免被拦截）
+# NGA请求头（加登录Cookie）
 headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Cookie": os.getenv("NGA_COOKIE", "")  # 从Secrets读取Cookie
 }
 
 def fetch_user_posts():
