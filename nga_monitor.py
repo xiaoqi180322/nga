@@ -5,11 +5,11 @@ import os
 
 # ---------------------- 必改配置（替换成你的信息） ----------------------
 # 要监控的NGA用户UID（数字，比如123456）
-TARGET_UID = os.getenv("NGA_UID", "你的目标用户UID")
+TARGET_UID = os.getenv("NGA_UID", "150058")
 # Server酱KEY（用于推送到微信）
-SERVERCHAN_KEY = os.getenv("SERVERCHAN_KEY", "你的Server酱KEY")
+SERVERCHAN_KEY = os.getenv("SERVERCHAN_KEY", "SCT314606TD2vODo7oR8UKhyZAw6oKKyGz")
 # NGA登录Cookie（必须填，否则抓不到回复）
-NGA_COOKIE = os.getenv("NGA_COOKIE", "你的NGA完整Cookie")
+NGA_COOKIE = os.getenv("NGA_COOKIE", "ngacn0comUserInfo=%25D0%25C4%25BA%25A3%09%25E5%25BF%2583%25E6%25B5%25B7%0939%0939%09%0910%0934936%094%090%09207%2C347%2C84%0961_4%2C-7_30; _178i=1; ngaPassportUid=535794; ngaPassportUrlencodedUname=%25D0%25C4%25BA%25A3; ngaPassportCid=X9oj2iogsjgju542lgfqbkc31uvpb8n0iidtoted; Hm_lvt_2728f3eacf75695538f5b1d1b5594170=1770682296,1770857648,1770969101,1771001633; HMACCOUNT=27B56921B761C67A; ngacn0comUserInfoCheck=317ea4545cd951307fd82fd586a0f872; ngacn0comInfoCheckTime=1771017192; lastvisit=1771017843; lastpath=/thread.php?searchpost=1&authorid=150058; bbsmisccookies=%7B%22uisetting%22%3A%7B0%3A1%2C1%3A1771468450%7D%2C%22pv_count_for_insad%22%3A%7B0%3A-18%2C1%3A1771088472%7D%2C%22insad_views%22%3A%7B0%3A1%2C1%3A1771088472%7D%7D; Hm_lpvt_2728f3eacf75695538f5b1d1b5594170=1771017843")
 
 # 存储已处理回复的文件（自动生成，无需修改）
 PROCESSED_REPLIES = "nga_replies.json"
