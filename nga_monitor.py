@@ -156,7 +156,7 @@ def main():
     if not TARGET_UID:
     print("❌ 配置错误：未填写要监控的用户authorid！")
     config_ok = False
-else:
+    else:
     print(f"✅ 监控目标authorid校验通过：{TARGET_UID}")
     
     if not SERVERCHAN_KEY or SERVERCHAN_KEY == "你的Server酱KEY":
