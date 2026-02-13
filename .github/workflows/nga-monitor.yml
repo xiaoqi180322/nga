@@ -3,7 +3,7 @@ name: NGA User Post Monitor
 # 触发规则：每分钟运行 + 手动触发
 on:
   schedule:
-    - cron: '* * * * *'
+    - cron: '*/2 * * * *'
   workflow_dispatch:
 
 # 工作流任务
