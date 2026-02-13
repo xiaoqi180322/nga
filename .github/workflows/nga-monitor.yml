@@ -1,0 +1,142 @@
+name: NGA User Post Monitor
+
+# 定时任务：每分钟运行一次（GitHub会有±1分钟延迟，符合NGA反爬）
+on:
+  schedule:
+    - cron: '* * * * *'
+  # 手动触发（测试用）
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
+
+      - name: Run monitor script
+        env:
+          NGA_UID: ${{ secrets.NGA_UID }}
+          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
+          # 缓存文件路径（记录已推送的帖子ID）
+          CACHE_FILE: ./nga_post_cache.txt
+        run: |
+          python - <<EOF
+          import requests
+          from bs4 import BeautifulSoup
+          import os
+          import time
+
+          # 读取环境变量
+          nga_uid = os.getenv("NGA_UID")
+          send_key = os.getenv("SERVERCHAN_KEY")
+          cache_file = os.getenv("CACHE_FILE")
+
+          # 初始化缓存（记录已推送的帖子ID）
+          if os.path.exists(cache_file):
+              with open(cache_file, "r") as f:
+                  posted_tids = set(f.read().splitlines())
+          else:
+              posted_tids = set()
+
+          # NGA请求头（模拟浏览器，避免被封）
+          headers = {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+          }
+
+          # 抓取用户主页
+          def fetch_user_posts():
+              url = f"https://bbs.nga.cn/nuke.php?uid={nga_uid}"
+              try:
+                  resp = requests.get(url, headers=headers, timeout=10)
+                  resp.encoding = "utf-8"
+                  soup = BeautifulSoup(resp.text, "html.parser")
+                  # 提取用户昵称
+                  username = soup.select_one(".usertop .username")
+                  username = username.text.strip() if username else "未知用户"
+                  # 提取所有帖子
+                  posts = soup.select(".topic_row")
+                  post_list = []
+                  for post in posts:
+                      tid = post.get("data-tid")
+                      title_elem = post.select_one(".topic_title")
+                      content_elem = post.select_one(".topic_content")
+                      if tid and title_elem:
+                          title = title_elem.text.strip()
+                          content = content_elem.text.strip()[:200] if content_elem else ""
+                          post_list.append({
+                              "tid": tid,
+                              "title": title,
+                              "content": content
+                          })
+                  return username, post_list
+              except Exception as e:
+                  print(f"抓取失败：{str(e)}")
+                  return "未知用户", []
+
+          # 推送至微信（Server酱）
+          def push_to_wechat(username, title, tid, content):
+              if not send_key:
+                  print("未配置Server酱SendKey")
+                  return
+              push_url = f"https://sctapi.ftqq.com/{send_key}.send"
+              data = {
+                  "title": f"【NGA】{username}发布新帖",
+                  "desp": f"""
+**发帖人**：{username}
+**帖子标题**：{title}
+**帖子链接**：https://bbs.nga.cn/read.php?tid={tid}
+**发布时间**：{time.strftime('%Y-%m-%d %H:%M:%S')}
+
+内容预览：{content}...
+                  """
+              }
+              try:
+                  resp = requests.post(push_url, data=data, timeout=10)
+                  print(f"推送结果：{resp.text}")
+              except Exception as e:
+                  print(f"推送失败：{str(e)}")
+
+          # 主逻辑：检查新帖并推送
+          def main():
+              username, posts = fetch_user_posts()
+              new_posts = [p for p in posts if p["tid"] not in posted_tids]
+              if new_posts:
+                  print(f"发现{len(new_posts)}条新帖")
+                  for post in new_posts:
+                      push_to_wechat(username, post["title"], post["tid"], post["content"])
+                      posted_tids.add(post["tid"])
+                  # 更新缓存文件
+                  with open(cache_file, "w") as f:
+                      f.write("\n".join(posted_tids))
+              else:
+                  print("暂无新帖")
+
+          if __name__ == "__main__":
+              main()
+          EOF
+
+      # 保存缓存文件（避免重复推送）
+      - name: Save cache file
+        uses: actions/upload-artifact@v4
+        with:
+          name: nga-cache
+          path: ./nga_post_cache.txt
+
+      # 恢复缓存文件（下次运行用）
+      - name: Restore cache file
+        uses: actions/download-artifact@v4
+        with:
+          name: nga-cache
+          path: ./
+        if: always()
