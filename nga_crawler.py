@@ -9,7 +9,8 @@ import pytz
 NGA_UID = "150058"
 NGA_URL = f"https://nga.178.com/thread.php?searchpost=1&authorid={NGA_UID}"
 SERVERCHAN_URL = "https://sctapi.ftqq.com/{sendkey}.send"
-DAYS_TO_KEEP = 3
+DAYS_TO_KEEP = 3  # 仅关注近3天的新回复
+TEST_RECORD_FILE = "last_test_time.txt"  # 记录首次测试时间的文件
 
 # 请求头
 HEADERS = {
@@ -21,7 +22,7 @@ HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8"
 }
 
-# 全局去重集合
+# ===== 全局去重集合（内存中记录已推送的 post_id） =====
 PUSHED_POST_IDS = set()
 
 # ===== 北京时间工具函数 =====
@@ -34,6 +35,7 @@ def beijing_time_str(fmt="%Y-%m-%d %H:%M:%S"):
 
 # ===== 通用推送函数 =====
 def send_serverchan_msg(title, desp):
+    """通用推送函数：封装Server酱推送逻辑"""
     sendkey = os.getenv("SERVERCHAN_SENDKEY")
     if not sendkey:
         print(f"❌ 未配置Server酱SendKey，无法推送【{title}】")
@@ -54,8 +56,34 @@ def send_serverchan_msg(title, desp):
         print(f"❌ 【{title}】推送异常: {str(e)}")
         return False
 
-# ===== 测试逻辑 =====
+# ===== 测试控制：仅首次运行执行测试 =====
+def should_run_test():
+    """判断是否需要执行测试推送（仅首次运行）"""
+    if not os.path.exists(TEST_RECORD_FILE):
+        return True  # 首次运行，执行测试
+    try:
+        with open(TEST_RECORD_FILE, "r", encoding="utf-8") as f:
+            last_test = f.read().strip()
+        # 非首次运行，跳过测试
+        return False
+    except Exception as e:
+        print(f"读取测试记录文件失败，默认执行测试: {e}")
+        return True
+
+def update_test_record():
+    """更新测试记录文件（标记已完成首次测试）"""
+    try:
+        with open(TEST_RECORD_FILE, "w", encoding="utf-8") as f:
+            f.write(beijing_time_str())
+        print("✅ 测试记录已更新，后续不再发送测试推送")
+        return True
+    except Exception as e:
+        print(f"❌ 更新测试记录文件失败: {e}")
+        return False
+
+# ===== 测试逻辑（返回测试结果和失败原因） =====
 def run_all_tests():
+    """执行所有测试，返回测试结果汇总"""
     test_results = {
         "overall": True,
         "nga_conn": {"status": True, "msg": ""},
@@ -126,6 +154,7 @@ def parse_nga_posts(html_content):
             thread_title = thread_elem.get_text(strip=True) if thread_elem else "未知标题"
             thread_url = "https://nga.178.com/" + thread_elem["href"] if thread_elem else ""
 
+            # 抓取完整回复内容
             content_elem = item.find("div", class_="postcontent")
             if content_elem:
                 for img in content_elem.find_all("img"):
@@ -156,7 +185,9 @@ def fetch_new_posts():
         response.encoding = "gbk"
         all_posts = parse_nga_posts(response.text)
 
+        # 筛选出从未推送过的新回复
         new_posts = [p for p in all_posts if p["post_id"] not in PUSHED_POST_IDS]
+        # 更新已推送集合
         for p in new_posts:
             PUSHED_POST_IDS.add(p["post_id"])
 
@@ -165,14 +196,15 @@ def fetch_new_posts():
             "new_posts": new_posts
         }
     except Exception as e:
+        # 抓取失败时推送提醒
         fail_title = f"❌ NGA监控抓取失败（UID:{NGA_UID}）"
         fail_desp = f"""
 NGA监控抓取失败！
 - 失败时间：{beijing_time_str()}
 - 错误原因：{str(e)}
 - 建议：检查Cookie是否过期或NGA网站是否可访问
-        """
-        send_serverchan_msg(fail_title, fail_desp.strip())
+        """.strip()
+        send_serverchan_msg(fail_title, fail_desp)
         return {
             "status": "failed",
             "error": str(e),
@@ -195,51 +227,57 @@ def format_posts_for_push(new_posts):
         """
     return push_content.strip()
 
-# ===== 主函数 =====
+# ===== 主函数（核心：仅首次运行测试，后续只抓新回复） =====
 def main():
     print(f"===== 开始执行NGA监控任务 {beijing_time_str()} =====")
 
-    # 执行所有测试并推送汇总
-    test_results = run_all_tests()
-
-    if test_results["overall"]:
-        test_title = "🎉 NGA监控脚本测试成功"
-        test_desp = f"""
+    # ========== 1. 仅首次运行执行测试并推送汇总 ==========
+    if should_run_test():
+        print("\n===== 首次运行，执行配置测试 =====")
+        test_results = run_all_tests()
+        
+        # 构造测试推送内容（匹配你要的格式）
+        if test_results["overall"]:
+            test_title = "🎉 NGA监控脚本测试成功"
+            test_desp = f"""
 你的NGA云端监控已部署完成！
 - 监控的UID：{NGA_UID if NGA_UID else "未配置"}
 - 测试时间：{beijing_time_str()}
 - NGA连接状态：✅ {test_results['nga_conn']['msg']}
 - 推送配置状态：✅ {test_results['serverchan']['msg']}
-- 后续目标用户发新帖会自动推送到微信。
-        """
-    else:
-        test_title = "⚠️ NGA监控脚本测试失败"
-        test_desp = f"""
+- 后续目标用户发新帖会自动推送到微信～
+            """.strip()
+        else:
+            test_title = "⚠️ NGA监控脚本测试失败"
+            test_desp = f"""
 你的NGA云端监控部署异常！
 - 监控的UID：{NGA_UID if NGA_UID else "未配置"}
 - 测试时间：{beijing_time_str()}
 - NGA连接状态：{"❌ " + test_results['nga_conn']['msg'] if not test_results['nga_conn']['status'] else "✅ " + test_results['nga_conn']['msg']}
 - 推送配置状态：{"❌ " + test_results['serverchan']['msg'] if not test_results['serverchan']['status'] else "✅ " + test_results['serverchan']['msg']}
-- 请修复以上问题后重新运行脚本。
-        """
-
-    send_serverchan_msg(test_title, test_desp.strip())
-
-    # 测试通过则执行监控
-    if test_results["overall"]:
-        print("\n===== 所有测试通过，进入正式监控流程 =====")
-        crawl_result = fetch_new_posts()
-        if crawl_result["status"] == "success":
-            new_posts = crawl_result["new_posts"]
-            if new_posts:
-                print(f"发现 {len(new_posts)} 条新回复，正在推送...")
-                push_content = format_posts_for_push(new_posts)
-                push_title = f"🎉 NGA新回复提醒（UID:{NGA_UID}） {beijing_time_str()}"
-                send_serverchan_msg(push_title, push_content)
-            else:
-                print("暂无3天内的新回复，无需推送")
+- 请修复以上问题后重新运行脚本～
+            """.strip()
+        
+        # 推送测试汇总
+        send_serverchan_msg(test_title, test_desp)
+        # 更新测试记录，后续不再测试
+        update_test_record()
     else:
-        print("\n❌ 测试未通过，跳过监控流程")
+        print("\n===== 非首次运行，跳过测试推送 =====")
+
+    # ========== 2. 测试通过/非首次运行，执行新回复监控 ==========
+    # 即使首次测试失败，也尝试执行监控（方便排查问题）
+    print("\n===== 执行NGA新回复监控 =====")
+    crawl_result = fetch_new_posts()
+    if crawl_result["status"] == "success":
+        new_posts = crawl_result["new_posts"]
+        if new_posts:
+            print(f"发现 {len(new_posts)} 条新回复，正在推送...")
+            push_content = format_posts_for_push(new_posts)
+            push_title = f"🎉 NGA新回复提醒（UID:{NGA_UID}） {beijing_time_str()}"
+            send_serverchan_msg(push_title, push_content)
+        else:
+            print("暂无3天内的新回复，无需推送")
 
     print(f"\n===== 本次监控任务执行完成 {beijing_time_str()} =====")
 
